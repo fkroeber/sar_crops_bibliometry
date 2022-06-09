@@ -13,10 +13,13 @@ The general workflow used to get there is depicted below and starts from harvest
 ## Results/Outcomes   
 
 ![image](figures/temporal_patterns.png)
-<figcaption align = "justify">Annual number of publications in the field of crop classifications alongside with lifespan of important satellites for SAR-specific studies</figcaption></br>
+Annual number of publications in the field of crop classifications alongside with lifespan of important satellites for SAR-specific studies  
+</br>  
 
 ![image](figures/study_areas_map.png)
-<figcaption align = "justify">Number of studies with areas of interest in the corresponding countries</figcaption></br>
+Number of studies with areas of interest in the corresponding countries  
+</br>  
 
 ![image](figures/citations.png)
-<figcaption align = "justify">Citation frequency of publications that are either part of the SAR-based crop classification literature body (x-axis) and/or are foundational for SAR-based crop classifications (y-axis)</figcaption></br>
+Citation frequency of publications that are either part of the SAR-based crop classification literature body (x-axis) and/or are foundational for SAR-based crop classifications (y-axis)  
+</br>  
