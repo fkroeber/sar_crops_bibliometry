@@ -1,0 +1,424 @@
+---
+title: "Bibliometric analyses"
+output: html_notebook
+---
+
+## Loading libraries & data
+
+```{r}
+# load libraries
+library(bibliometrix)
+library(rcrossref)
+library(ggplot2)
+library(ggrepel)
+library(janitor)
+library(openxlsx)
+library(plyr)
+library(RColorBrewer)
+library(stringdist)
+library(tidyverse)
+
+# define current year
+current_year = as.integer(format(Sys.Date(), "%Y"))
+
+setwd("C:/Users/felix/github/bibliometric_analyses_sar_crops")
+```
+
+### SAR-specific crop classification literature
+
+```{r}
+# reading & merging data for SAR crops
+# importing web of science dataset
+web_data_I = convert2df("refs_metadata/wos_crops_sar_I.txt")
+web_data_II = convert2df("refs_metadata/wos_crops_sar_II.txt")
+
+# importing scopus dataset
+scopus_data = convert2df(
+  "refs_metadata/scopus_crops_sar.bib", 
+  dbsource="scopus", 
+  format="bibtex"
+  )
+
+# combine both datasets
+ws_sar_crops = mergeDbSources(
+  web_data_I,
+  web_data_II,
+  scopus_data, 
+  remove.duplicated=T)
+ws_sar_crops$AU = str_replace_all(ws_sar_crops$AU, " ", ", ")
+ws_sar_crops$AU = str_replace_all(ws_sar_crops$AU, ";", "; ")
+
+# exporting file
+write.csv(
+  ws_sar_crops, 
+  "refs_metadata/sar_crops.csv"
+  )
+
+# write.table(
+#   ws_sar_crops, 
+#   "refs_metadata/sar_crops.txt", 
+#   sep='\t', 
+#   quote=F, 
+#   row.names = F
+#   )
+```
+
+```{r}
+# remove duplicates based on title similarity
+# thresholding levenshtein distance > 0.9
+lv_mask = ws_sar_crops %>%
+  {stringsimmatrix(.$TI, method="lv")} %>% 
+  replace((. < 0.95 | lower.tri(.)), 0) %>%
+  replace(. > 0, 1)
+
+diag(lv_mask) = 0
+
+ws_sar_crops = 
+  which(lv_mask==1, arr.ind=TRUE) %>% 
+  as_tibble() %>% 
+  arrange(col) %>%
+  mutate(col = -col) %>% 
+  pull(col) %>% 
+  {slice(ws_sar_crops, .)}
+```
+
+```{r}
+# restrict analyses to pubs cited at least once
+ws_sar_crops =
+  ws_sar_crops %>% 
+  filter(TC >= 1)
+```
+
+```{r}
+# remove false positives based on manual screening of titles
+false_pos = read_csv("refs_metadata/sar_crops_false_pos.csv")
+
+df_incl_dups = match_df(ws_sar_crops, false_pos) %>% 
+  bind_rows(ws_sar_crops)
+
+ws_sar_crops = df_incl_dups[!(duplicated(df_incl_dups) | duplicated(df_incl_dups, fromLast = TRUE)), ]
+```
+
+```{r}
+# write cleaned df to disk
+write.csv(
+  ws_sar_crops, 
+  "refs_metadata/sar_crops_clean.csv"
+  )
+```
+
+### General remote sensing based crop classification literature
+
+```{r}
+# reading & merging data for crops
+# importing web of science dataset
+web_data_I = convert2df("refs_metadata/wos_crops_I.txt")
+web_data_II = convert2df("refs_metadata/wos_crops_II.txt")
+
+# importing scopus dataset
+scopus_data_I = convert2df(
+  "refs_metadata/scopus_crops_I.bib",
+  dbsource="scopus",
+  format="bibtex"
+  )
+scopus_data_II = convert2df(
+  "refs_metadata/scopus_crops_II.bib",
+  dbsource="scopus",
+  format="bibtex"
+  )
+
+# combined both datasets
+ws_general = mergeDbSources(
+  web_data_I, 
+  web_data_II,
+  scopus_data_I,
+  scopus_data_II, 
+  remove.duplicated=T)
+```
+
+```{r}
+# remove duplicates based on title similarity
+# thresholding levenshtein distance > 0.9
+lv_mask = ws_general %>%
+  {stringsimmatrix(.$TI, method="lv")} %>% 
+  replace((. < 0.95 | lower.tri(.)), 0) %>%
+  replace(. > 0, 1)
+
+diag(lv_mask) = 0
+
+ws_general = 
+  which(lv_mask==1, arr.ind=TRUE) %>% 
+  as_tibble() %>% 
+  arrange(col) %>%
+  mutate(col = -col) %>% 
+  pull(col) %>% 
+  {slice(ws_general, .)}
+```
+
+```{r}
+# restrict analyses to pubs cited at least once
+ws_general =
+  ws_general %>% 
+  filter(TC >= 1)
+```
+
+## General descriptive analyses
+
+```{r}
+# extracting single features per hand
+# analysing occurence of languages
+count(ws_sar_crops, LA) %>% 
+  arrange(desc(n))
+
+# analysing document types
+count(ws_sar_crops, DT) %>% 
+  arrange(desc(n)) %>% 
+  mutate(perc = round(n/dim(ws_sar_crops)[1],3)*100)
+
+# analysing document types
+n_articles = count(ws_sar_crops, DT) %>% 
+filter(DT == "ARTICLE") %>% 
+  pull(n)
+
+filter(ws_sar_crops, DT == "ARTICLE") %>% 
+  count(JI) %>% 
+  arrange(desc(n)) %>% 
+  mutate(perc = round(n/n_articles,3)*100)
+```
+
+```{r}
+# using automated bibliometrix procedures to perform descriptive analysis 
+# calculating main bibliometric features
+res = biblioAnalysis(ws_sar_crops)
+sum = summary(res)
+plot(res)
+```
+
+```{r}
+# calculating h_indices
+hindices = Hindex(ws_sar_crops)
+hindices$H %>% arrange(desc(h_index))
+hindices[["CitationList"]][[" MCNAIRN H"]]
+```
+
+
+## Temporal evolution of publications
+
+```{r}
+# temporal evolution of number of publications
+# incl. comparison to all publications in the field of crop monitoring
+
+# create tibble with number of publications per year
+annual_pubs = tibble(year = (1950:2021)) %>% 
+  left_join(
+    (ws_sar_crops %>% 
+    group_by(PY) %>% 
+    dplyr::summarise(sar = n())),
+    by = c("year" = "PY")
+  ) %>% 
+  left_join(
+    (ws_general %>% 
+    group_by(PY) %>% 
+    dplyr::summarise(general = n())),
+    by = c("year" = "PY")
+  ) %>% 
+  pivot_longer(cols = c("sar", "general"),
+               names_to = "sensor_type",
+               values_to = "n_pub")
+
+annual_pubs$sensor_type = factor(
+  annual_pubs$sensor_type, 
+  levels=c("sar", "general")
+)
+
+facet_names = c(`general` = "sensor-unspecific",
+                `sar` = "SAR-based")
+
+# create df with relevant satellites their operating times
+df_sat = data.frame(
+  sensor_type = factor(),
+  satellite = character(),
+  start = integer(),
+  end = integer(),
+  ypos = integer()
+) 
+
+df_sat = df_sat %>% 
+  add_row(start=1991, end=2001, satellite="ers-1", sensor_type="sar") %>% 
+  add_row(start=1995, end=2011, satellite="ers-2", sensor_type="sar") %>% 
+  add_row(start=1995, end=2013, satellite="radarsat-1", sensor_type="sar") %>% 
+  add_row(start=2007, end=current_year, satellite="radarsat-2", sensor_type="sar") %>% 
+  add_row(start=2007, end=current_year, satellite="terrasar-x", sensor_type="sar") %>% 
+  add_row(start=2014, end=current_year, satellite="sentinel-1", sensor_type="sar") %>% 
+  mutate(ypos = seq(100, 250, by = 30))
+  # add_row(start=1972, end=1993, satellite="landsat 1-4", sensor_type="general") %>%
+  # add_row(start=1984, end=2011, satellite="landsat 5", sensor_type="general") %>% 
+  # add_row(start=1999, end=current_year, satellite="landsat 7", sensor_type="general") %>% 
+  # add_row(start=2013, end=current_year, satellite="landsat 8", sensor_type="general") %>% 
+  # add_row(start=2015, end=current_year, satellite="sentinel 2", sensor_type="general")
+
+df_sat$sensor_type = factor(df_sat$sensor_type, levels=c("sar", "general"))
+```
+
+```{r}
+# plot tibble as histogram
+pl2 = ggplot(annual_pubs) +
+  geom_bar(aes(x=year, y=n_pub, fill=factor(sensor_type)), stat="identity") +
+  geom_segment(data = df_sat, aes(x=start, xend=end, y=ypos, yend=ypos),
+               arrow = arrow(length = unit(0.05, "inches"), ends="both"),
+               lineend = "round", size = 0.5) +
+  geom_text(data = df_sat, aes(x=(start+end)/2, y=ypos+15, label=satellite),
+            size=2) +
+  facet_wrap(~sensor_type, labeller=as_labeller(facet_names)) +
+  xlab("\nyear") +
+  ylab("number of annual publications\n") +
+  scale_y_continuous(limits = c(0,375), expand = c(0, 0)) +
+  scale_fill_manual(values = c(rev(brewer.pal(4, "Blues")[-1]))) +
+  theme_classic() +
+  theme(strip.background = element_blank(),
+        legend.position = "none") 
+
+pl2
+ggsave("figures/temporal_patterns.png", pl2, width=7, height=3)
+```
+
+## Citation analyses
+
+```{r}
+# top cited papers (from outside)
+top_cited_papers = res$MostCitedPapers %>%
+  clean_names() %>% 
+  mutate(paper = map(.x = paper,
+                     .f = ~str_split(.x, ", ")[[1]])) %>% 
+  mutate(paper = map_chr(.x = paper,
+                         .f = ~str_c(.x[1:2], collapse=", "))) %>% 
+  mutate(year = map_chr(.x = paper,
+                        .f = ~str_split(.x, ", ")[[1]][2])) %>% 
+  mutate(year = as.numeric(year)) %>% 
+  select(paper, doi, tc, year) %>%
+  mutate_all(na_if,"") %>% 
+  mutate(doi = tolower(doi)) %>%
+  drop_na()
+
+top_cited_papers
+```
+
+```{r}
+# top cited papers (in references)
+cited_refs = citations(ws_sar_crops)
+
+cited_refs = 
+  cited_refs$Cited %>% 
+  as_tibble() %>% 
+  mutate(DOI = map_chr(.x = CR,
+                       .f = ~str_split(.x, "DOI ")[[1]][2])) %>% 
+  mutate(year = map_chr(.x = CR,
+                        .f = ~str_split(.x, ", ")[[1]][2]) %>% 
+                as.numeric()) %>%
+  mutate(paper = map(.x = CR,
+                     .f = ~str_split(.x, ", ")[[1]])) %>% 
+  mutate(paper = map_chr(.x = paper,
+                         .f = ~str_c(.x[1:2], collapse=", "))) %>% 
+  transmute(paper = paper, DOI = DOI, n_cited_refs = n, year = year) %>%
+  mutate_all(na_if,"") %>%  
+  clean_names() %>%
+  mutate(doi = tolower(doi)) %>%
+  drop_na()
+
+cited_refs
+```
+```{r}
+# save top cited papers in tabular form
+top_cited_papers %>% 
+  head(20) %>% 
+  left_join(
+    ws_sar_crops %>% 
+      select(DI,TI) %>% 
+      mutate(DI = tolower(DI)), 
+    c("doi" = "DI")
+    ) %>% 
+  transmute(
+    abbreviation = str_to_title(paper),
+    citations = tc,
+    title = str_to_title(TI),
+    doi = doi
+  ) %>% 
+  write.csv("results/citations_I.csv", row.names=F)
+
+
+cited_refs %>% 
+  head(20) %>% 
+  left_join(
+    ws_sar_crops %>% 
+      select(DI,TI) %>% 
+      mutate(DI = tolower(DI)), 
+    c("doi" = "DI")
+    ) %>% 
+  transmute(
+    abbreviation = str_to_title(paper),
+    citations = n_cited_refs,
+    title = str_to_title(TI),
+    doi = doi
+  ) %>% 
+  mutate(title = map2_chr(
+    .x = title, 
+    .y = doi,
+    .f = ~ifelse(
+      is.na(.x), 
+      ifelse(
+        is.null(cr_works(dois=.y)$data$title),
+        "unknown",
+        cr_works(dois=.y)$data$title),
+      .x)
+      )
+    ) %>% 
+ write.csv("results/citations_II.csv", row.names=F)
+```
+
+```{r}
+# calculate percentage of studies citing base literature
+cited_refs %>% 
+  mutate(perc = round(n_cited_refs/dim(ws_sar_crops)[1], 3)*100)
+```
+
+
+
+```{r}
+# merging citation dfs
+cited_df = dplyr::union(
+    cited_refs %>% select(paper, doi, year), 
+    top_cited_papers %>% select(paper, doi, year)) %>% 
+  left_join(cited_refs %>% select(doi, n_cited_refs), by = "doi") %>% 
+  left_join(top_cited_papers %>% select(doi, tc), by = "doi") %>%
+  replace(is.na(.), 0) %>%
+  distinct(doi, .keep_all = TRUE) %>% 
+  filter(year > 1950)
+```
+
+```{r}
+# plotting merged df
+pl3 = cited_df %>% 
+  ggplot(aes(x=tc, y=n_cited_refs)) +
+  geom_point(aes(col=year), size=3) +
+  geom_label_repel(
+    data = cited_df %>% filter(
+      ((n_cited_refs > 50) | (tc > 150)) |
+      ((n_cited_refs > 20) & (tc > 50))), 
+    aes(x=tc, y=n_cited_refs, label = paper), 
+    size=2, 
+    max.time = 5,
+    min.segment.length = 0,
+    max.overlaps=10) +
+  ylab("\nfrequency with which studies are cited\n in SAR-based crop classification studies") +
+  xlab("number of citations of SAR-based classification studies\n") +
+  scale_colour_viridis_c() +
+  theme_bw() +
+  theme(strip.background = element_blank(),
+        panel.grid =  element_blank())
+
+pl3
+ggsave("figures/citations.png", pl3, width=7, height=4)
+```
+
+
+

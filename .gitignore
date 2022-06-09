@@ -1,0 +1,7 @@
+# exclude folders
+*background/
+*refs_full_article/
+*software/
+
+# exclude password files
+*config.py
