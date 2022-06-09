@@ -3,5 +3,9 @@
 *refs_full_article/
 *software/
 
+# exclude specific files
+*figures/workflow.png
+*figures/study_areas.png
+
 # exclude password files
 *config.py
